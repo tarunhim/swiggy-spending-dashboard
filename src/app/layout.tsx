@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Swiggy Spending Dashboard",
-  description: "Visualize your complete Swiggy order history with beautiful charts and insights",
+  title: "swigdashVtarun — Swiggy Spending Dashboard",
+  description: "Visualize your complete Swiggy order history with beautiful charts and insights — by Tarun",
 };
 
 export default function RootLayout({

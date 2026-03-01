@@ -123,7 +123,7 @@ export default function DashboardPage() {
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            {fetchMeta?.expectedTotal !== null
+            {fetchMeta && fetchMeta.expectedTotal !== null
               ? `${fetchMeta.fetchedCount.toLocaleString("en-IN")} / ${fetchMeta.expectedTotal.toLocaleString("en-IN")} orders fetched`
               : `${data.summary.totalOrders.toLocaleString("en-IN")} orders analyzed`}
           </p>

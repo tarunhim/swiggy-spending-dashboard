@@ -221,8 +221,7 @@ function computeCuisines(orders: SwiggyOrder[]): CuisineData[] {
       orders: data.orders,
       amount: Math.round(data.amount),
     }))
-    .sort((a, b) => b.orders - a.orders)
-    .slice(0, 15);
+    .sort((a, b) => b.orders - a.orders);
 }
 
 function computeItems(orders: SwiggyOrder[]): ItemData[] {
@@ -247,8 +246,7 @@ function computeItems(orders: SwiggyOrder[]): ItemData[] {
       count: data.count,
       totalSpent: Math.round(data.totalSpent),
     }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 20);
+    .sort((a, b) => b.count - a.count);
 }
 
 function computeFunStats(orders: SwiggyOrder[]): FunStats {

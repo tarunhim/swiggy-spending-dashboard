@@ -53,6 +53,39 @@ export interface SwiggyOrdersResponse {
   };
 }
 
+export type OrdersFetchStopReason =
+  | "completed"
+  | "no_more_orders"
+  | "has_more_false"
+  | "reached_expected_total"
+  | "max_pages_reached"
+  | "cursor_stalled"
+  | "reported_total_mismatch"
+  | "waf_challenge"
+  | "auth_expired_mid_fetch"
+  | "empty_response_mid_fetch"
+  | "invalid_json_mid_fetch"
+  | "api_error_mid_fetch"
+  | "empty_page_with_has_more"
+  | "unknown";
+
+export interface OrdersFetchMeta {
+  expectedTotal: number | null;
+  fetchedCount: number;
+  pagesFetched: number;
+  truncated: boolean;
+  stopReason: OrdersFetchStopReason;
+  maxPages: number;
+}
+
+export interface OrdersFetchSuccessResponse {
+  success: true;
+  orders: SwiggyOrder[];
+  totalOrders: number;
+  fetchMeta: OrdersFetchMeta;
+  warning?: string;
+}
+
 export interface SwiggyAuthResponse {
   statusCode: number;
   statusMessage?: string;

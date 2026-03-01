@@ -20,7 +20,11 @@ interface SpendingChartProps {
 
 export default function SpendingChart({ monthly, yearly }: SpendingChartProps) {
   const [view, setView] = useState<"monthly" | "yearly">("monthly");
-  const data = view === "monthly" ? monthly.slice(-12) : yearly;
+  const [monthRange, setMonthRange] = useState<12 | 24 | "all">(12);
+
+  const monthlyData =
+    monthRange === "all" ? monthly : monthly.slice(-monthRange);
+  const data = view === "monthly" ? monthlyData : yearly;
   const xKey = view === "monthly" ? "month" : "year";
 
   const formatLabel = (val: string) => {
@@ -36,20 +40,45 @@ export default function SpendingChart({ monthly, yearly }: SpendingChartProps) {
     <div className="bg-card border border-border rounded-xl p-6">
       <div className="flex items-center justify-between mb-6">
         <h3 className="font-semibold text-card-foreground">Spending Over Time</h3>
-        <div className="flex bg-muted rounded-lg p-0.5">
-          {(["monthly", "yearly"] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                view === v
-                  ? "bg-card text-card-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-card-foreground"
-              }`}
-            >
-              {v === "monthly" ? "Monthly" : "Yearly"}
-            </button>
-          ))}
+        <div className="flex flex-wrap justify-end gap-2">
+          <div className="flex bg-muted rounded-lg p-0.5">
+            {(["monthly", "yearly"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                  view === v
+                    ? "bg-card text-card-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-card-foreground"
+                }`}
+              >
+                {v === "monthly" ? "Monthly" : "Yearly"}
+              </button>
+            ))}
+          </div>
+          {view === "monthly" && (
+            <div className="flex bg-muted rounded-lg p-0.5">
+              {(
+                [
+                  { label: "12M", value: 12 as const },
+                  { label: "24M", value: 24 as const },
+                  { label: "All", value: "all" as const },
+                ] as const
+              ).map((option) => (
+                <button
+                  key={option.label}
+                  onClick={() => setMonthRange(option.value)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                    monthRange === option.value
+                      ? "bg-card text-card-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-card-foreground"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   Zap,
 } from "lucide-react";
+import { OrdersFetchMeta, OrdersFetchSuccessResponse } from "@/types/swiggy";
 import LoginForm from "@/components/login-form";
 import LoadingScreen from "@/components/loading-screen";
 
@@ -37,13 +38,32 @@ export default function Home() {
         return;
       }
 
-      if (!data.orders || data.orders.length === 0) {
+      const payload = data as Partial<OrdersFetchSuccessResponse>;
+
+      if (!Array.isArray(payload.orders) || payload.orders.length === 0) {
         setError("No orders found. Please check your token and try again.");
         setLoading(false);
         return;
       }
 
-      sessionStorage.setItem("swiggy_orders", JSON.stringify(data.orders));
+      const fetchMeta: OrdersFetchMeta = payload.fetchMeta || {
+        expectedTotal: null,
+        fetchedCount: payload.orders.length,
+        pagesFetched: 0,
+        truncated: false,
+        stopReason: "unknown",
+        maxPages: 0,
+      };
+
+      sessionStorage.setItem(
+        "swiggy_orders",
+        JSON.stringify({
+          orders: payload.orders,
+          fetchMeta,
+          warning: typeof payload.warning === "string" ? payload.warning : undefined,
+          fetchedAt: new Date().toISOString(),
+        })
+      );
       router.push("/dashboard");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";

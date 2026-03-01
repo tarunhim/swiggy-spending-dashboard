@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, Fragment } from "react";
-import { Search, ChevronDown, ChevronUp } from "lucide-react";
+import { useState, Fragment, useEffect } from "react";
+import { Search, ChevronDown, ChevronUp, Download } from "lucide-react";
 import { SwiggyOrder } from "@/types/swiggy";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
@@ -12,8 +12,9 @@ interface OrderTableProps {
 export default function OrderTable({ orders }: OrderTableProps) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
+  const [perPage, setPerPage] = useState(15);
+  const [pageInput, setPageInput] = useState("1");
   const [expandedId, setExpandedId] = useState<string | number | null>(null);
-  const perPage = 15;
 
   const filtered = orders.filter(
     (o) =>
@@ -23,8 +24,86 @@ export default function OrderTable({ orders }: OrderTableProps) {
       )
   );
 
-  const totalPages = Math.ceil(filtered.length / perPage);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
   const paginated = filtered.slice(page * perPage, (page + 1) * perPage);
+
+  useEffect(() => {
+    if (page > totalPages - 1) {
+      setPage(Math.max(0, totalPages - 1));
+      setExpandedId(null);
+    }
+  }, [page, totalPages]);
+
+  useEffect(() => {
+    setPageInput(String(Math.min(page + 1, totalPages)));
+  }, [page, totalPages]);
+
+  const escapeCsv = (value: string) => {
+    if (value.includes(",") || value.includes("\n") || value.includes("\"")) {
+      return `"${value.replace(/"/g, "\"\"")}"`;
+    }
+    return value;
+  };
+
+  const handleExportCsv = () => {
+    const header = [
+      "Date",
+      "Restaurant",
+      "Items",
+      "Amount",
+      "Discount",
+      "Delivery Fee",
+      "Payment",
+      "Status",
+      "Cuisine",
+    ];
+    const rows = filtered.map((order) => {
+      const discount = order.order_discount || order.coupon_discount || order.discount || 0;
+      const deliveryFee =
+        order.order_delivery_charge ||
+        order.discounted_total_delivery_fee ||
+        order.delivery_fee ||
+        0;
+      const cuisine = Array.isArray(order.restaurant_cuisine)
+        ? order.restaurant_cuisine.join(", ")
+        : order.restaurant_cuisine || "";
+
+      return [
+        order.order_time || "",
+        order.restaurant_name || "",
+        (order.order_items || []).map((item) => item.name).join(" | "),
+        String(order.order_total || 0),
+        String(discount),
+        String(deliveryFee),
+        order.payment_method || "",
+        order.order_delivery_status || "",
+        cuisine,
+      ];
+    });
+
+    const csv = [header, ...rows]
+      .map((row) => row.map((cell) => escapeCsv(cell)).join(","))
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "swiggy-orders.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleJump = () => {
+    const num = Number(pageInput);
+    if (!Number.isFinite(num)) return;
+    const target = Math.min(totalPages, Math.max(1, Math.floor(num)));
+    setPage(target - 1);
+    setExpandedId(null);
+    setPageInput(String(target));
+  };
 
   return (
     <div className="bg-card border border-border rounded-xl p-6">
@@ -32,15 +111,36 @@ export default function OrderTable({ orders }: OrderTableProps) {
         <h3 className="font-semibold text-card-foreground">
           Order History ({orders.length})
         </h3>
-        <div className="relative w-full sm:w-64">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-            placeholder="Search orders..."
-            className="w-full h-9 pl-9 pr-3 bg-muted border border-border rounded-lg text-sm text-card-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/50"
-          />
+        <div className="w-full sm:w-auto flex flex-col sm:flex-row gap-2">
+          <div className="relative w-full sm:w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(0); setExpandedId(null); }}
+              placeholder="Search orders..."
+              className="w-full h-9 pl-9 pr-3 bg-muted border border-border rounded-lg text-sm text-card-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+          </div>
+          <select
+            value={perPage}
+            onChange={(e) => { setPerPage(Number(e.target.value)); setPage(0); setExpandedId(null); }}
+            className="h-9 px-2 bg-muted border border-border rounded-lg text-xs text-card-foreground"
+            aria-label="Rows per page"
+          >
+            {[15, 50, 100].map((size) => (
+              <option key={size} value={size}>
+                {size}/page
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={handleExportCsv}
+            className="h-9 px-3 bg-muted border border-border rounded-lg text-xs text-card-foreground hover:bg-muted/70 transition-colors inline-flex items-center gap-1.5"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export CSV
+          </button>
         </div>
       </div>
 
@@ -139,6 +239,13 @@ export default function OrderTable({ orders }: OrderTableProps) {
                 )}
               </Fragment>
             ))}
+            {paginated.length === 0 && (
+              <tr>
+                <td colSpan={6} className="py-6 text-center text-muted-foreground">
+                  No orders match your current search.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -149,7 +256,7 @@ export default function OrderTable({ orders }: OrderTableProps) {
             Showing {page * perPage + 1}–{Math.min((page + 1) * perPage, filtered.length)} of{" "}
             {filtered.length}
           </p>
-          <div className="flex gap-1">
+          <div className="flex items-center gap-1">
             <button
               onClick={() => setPage(Math.max(0, page - 1))}
               disabled={page === 0}
@@ -164,6 +271,26 @@ export default function OrderTable({ orders }: OrderTableProps) {
             >
               Next
             </button>
+            <div className="flex items-center gap-1 ml-2">
+              <input
+                type="number"
+                min={1}
+                max={totalPages}
+                value={pageInput}
+                onChange={(e) => setPageInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleJump();
+                }}
+                className="w-16 h-8 px-2 bg-muted border border-border rounded-md text-xs text-card-foreground"
+                aria-label="Jump to page"
+              />
+              <button
+                onClick={handleJump}
+                className="px-2.5 h-8 text-xs bg-muted rounded-md text-card-foreground"
+              >
+                Go
+              </button>
+            </div>
           </div>
         </div>
       )}

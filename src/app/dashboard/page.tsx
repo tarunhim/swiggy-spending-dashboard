@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, UtensilsCrossed } from "lucide-react";
-import { DashboardData, SwiggyOrder } from "@/types/swiggy";
+import { AlertTriangle, ArrowLeft, UtensilsCrossed } from "lucide-react";
+import { DashboardData, OrdersFetchMeta, SwiggyOrder } from "@/types/swiggy";
 import { processOrders } from "@/lib/data-processor";
 import LoadingScreen from "@/components/loading-screen";
 import SummaryCards from "@/components/summary-cards";
@@ -17,10 +17,40 @@ import RestaurantTable from "@/components/restaurant-table";
 import OrderTable from "@/components/order-table";
 import FunStatsSection from "@/components/fun-stats";
 
+interface StoredDashboardPayload {
+  orders: SwiggyOrder[];
+  fetchMeta?: OrdersFetchMeta;
+  warning?: string;
+  fetchedAt?: string;
+}
+
+function describeStopReason(reason?: string): string {
+  const messages: Record<string, string> = {
+    completed: "Fetch completed successfully.",
+    no_more_orders: "Swiggy returned no more orders.",
+    has_more_false: "Swiggy marked pagination as complete.",
+    reached_expected_total: "Fetched the reported total number of orders.",
+    max_pages_reached: "Reached the configured pagination page limit.",
+    cursor_stalled: "Pagination cursor stopped advancing.",
+    reported_total_mismatch: "Fetched fewer orders than Swiggy reported.",
+    waf_challenge: "Swiggy security challenge interrupted pagination.",
+    auth_expired_mid_fetch: "Session expired while fetching more pages.",
+    empty_response_mid_fetch: "Received an empty response while paginating.",
+    invalid_json_mid_fetch: "Received invalid JSON while paginating.",
+    api_error_mid_fetch: "Swiggy returned an API error while paginating.",
+    empty_page_with_has_more: "Swiggy reported more pages but returned an empty page.",
+    unknown: "Pagination ended for an unknown reason.",
+  };
+
+  return messages[reason || "unknown"] || messages.unknown;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [fetchMeta, setFetchMeta] = useState<OrdersFetchMeta | null>(null);
+  const [fetchWarning, setFetchWarning] = useState<string>("");
 
   useEffect(() => {
     const raw = sessionStorage.getItem("swiggy_orders");
@@ -30,13 +60,27 @@ export default function DashboardPage() {
     }
 
     try {
-      const orders: SwiggyOrder[] = JSON.parse(raw);
+      const parsed = JSON.parse(raw) as SwiggyOrder[] | StoredDashboardPayload;
+      let orders: SwiggyOrder[] = [];
+      let meta: OrdersFetchMeta | null = null;
+      let warning = "";
+
+      if (Array.isArray(parsed)) {
+        orders = parsed;
+      } else if (parsed && Array.isArray(parsed.orders)) {
+        orders = parsed.orders;
+        meta = parsed.fetchMeta || null;
+        warning = parsed.warning || "";
+      }
+
       if (!orders || orders.length === 0) {
         router.push("/");
         return;
       }
       const processed = processOrders(orders);
       setData(processed);
+      setFetchMeta(meta);
+      setFetchWarning(warning);
     } catch {
       router.push("/");
     } finally {
@@ -47,6 +91,14 @@ export default function DashboardPage() {
   if (loading || !data) {
     return <LoadingScreen message="Processing your orders..." />;
   }
+
+  const isPartial =
+    Boolean(fetchMeta?.truncated) ||
+    Boolean(
+      fetchMeta &&
+      fetchMeta.expectedTotal !== null &&
+      fetchMeta.fetchedCount < fetchMeta.expectedTotal
+    );
 
   return (
     <div className="min-h-screen bg-background">
@@ -71,13 +123,40 @@ export default function DashboardPage() {
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            {data.summary.totalOrders} orders analyzed
+            {fetchMeta?.expectedTotal !== null
+              ? `${fetchMeta.fetchedCount.toLocaleString("en-IN")} / ${fetchMeta.expectedTotal.toLocaleString("en-IN")} orders fetched`
+              : `${data.summary.totalOrders.toLocaleString("en-IN")} orders analyzed`}
           </p>
         </div>
       </header>
 
       {/* Dashboard Content */}
       <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+        {(isPartial || fetchWarning) && (
+          <section className="border border-amber-500/40 bg-amber-500/10 rounded-xl p-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-400 mt-0.5 flex-shrink-0" />
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-amber-200">
+                  Showing partial data from Swiggy
+                </p>
+                {fetchMeta && (
+                  <p className="text-xs text-amber-100/90">
+                    {fetchMeta.fetchedCount.toLocaleString("en-IN")}
+                    {fetchMeta.expectedTotal !== null
+                      ? ` of ${fetchMeta.expectedTotal.toLocaleString("en-IN")}`
+                      : ""}{" "}
+                    orders fetched. {describeStopReason(fetchMeta.stopReason)}
+                  </p>
+                )}
+                {fetchWarning && (
+                  <p className="text-xs text-amber-100/90">{fetchWarning}</p>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* Summary Cards */}
         <section className="animate-fade-in">
           <SummaryCards stats={data.summary} />

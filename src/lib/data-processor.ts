@@ -11,6 +11,7 @@ import {
   ItemData,
   FunStats,
 } from "@/types/swiggy";
+import { parseOrderTime } from "@/lib/utils";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -24,82 +25,133 @@ function getOrderTotal(o: SwiggyOrder): number {
   return num(o.order_total);
 }
 
-function getDeliveryFee(o: SwiggyOrder): number {
+export function getDeliveryFee(o: SwiggyOrder): number {
   return num(o.order_delivery_charge) || num(o.discounted_total_delivery_fee) || num(o.delivery_fee) || 0;
 }
 
-function getDiscount(o: SwiggyOrder): number {
-  return num(o.order_discount) || num(o.order_discount_effective) || num(o.coupon_discount) || num(o.discount) || 0;
+/**
+ * Total discount on an order. Swiggy reports an overall figure (order_discount)
+ * and its parts (coupon + restaurant/trade discount); which ones are filled in
+ * varies, so take the largest of "overall" and "sum of parts" rather than the
+ * first non-zero field. This never double counts.
+ */
+export function getDiscount(o: SwiggyOrder): number {
+  return Math.max(
+    num(o.order_discount),
+    num(o.order_discount_effective),
+    num(o.discount),
+    num(o.coupon_discount) + num(o.trade_discount),
+    0
+  );
+}
+
+/** Cancelled / failed orders were not paid for and must not count as spend. */
+export function isCancelledOrder(o: SwiggyOrder): boolean {
+  const status = `${o.order_status || ""} ${o.order_delivery_status || ""}`.toLowerCase();
+  return /cancel|fail|reject/.test(status);
 }
 
 function getCuisines(o: SwiggyOrder): string[] {
   const c = o.restaurant_cuisine;
-  if (!c) return ["Other"];
-  if (Array.isArray(c)) return c.length > 0 ? c : ["Other"];
-  return c.split(",").map((s) => s.trim()).filter(Boolean);
+  const list = Array.isArray(c)
+    ? c.map((s) => String(s).trim()).filter(Boolean)
+    : typeof c === "string"
+      ? c.split(",").map((s) => s.trim()).filter(Boolean)
+      : [];
+  return list.length > 0 ? list : ["Other"];
 }
 
+/** An order paired with its parsed (wall-clock) time. */
+interface Entry {
+  o: SwiggyOrder;
+  t: Date;
+}
+
+const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+/** Whole-day number from the local calendar date, immune to timezone/DST shifts. */
+const dayNumber = (d: Date) => Math.round(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
+
 export function processOrders(orders: SwiggyOrder[]): DashboardData {
-  const sorted = [...orders].sort(
-    (a, b) => new Date(a.order_time).getTime() - new Date(b.order_time).getTime()
-  );
+  const parsed = orders.map((o) => ({ o, t: parseOrderTime(o.order_time) }));
+
+  const cancelledOrders = parsed.filter((e) => isCancelledOrder(e.o)).length;
+  const undatedOrders = parsed.filter((e) => !isCancelledOrder(e.o) && !e.t).length;
+
+  // Stats only use orders that were actually placed and have a usable time.
+  const entries: Entry[] = parsed
+    .filter((e): e is Entry => e.t !== null && !isCancelledOrder(e.o))
+    .sort((a, b) => a.t.getTime() - b.t.getTime());
+
+  // The order table still lists everything, newest first (undated at the end).
+  const allNewestFirst = [...parsed]
+    .sort((a, b) => (b.t ? b.t.getTime() : -Infinity) - (a.t ? a.t.getTime() : -Infinity))
+    .map((e) => e.o);
 
   return {
-    summary: computeSummary(sorted),
-    monthlySpending: computeMonthly(sorted),
-    yearlySpending: computeYearly(sorted),
-    weekdayDistribution: computeWeekday(sorted),
-    hourlyDistribution: computeHourly(sorted),
-    topRestaurants: computeRestaurants(sorted),
-    cuisineBreakdown: computeCuisines(sorted),
-    topItems: computeItems(sorted),
-    funStats: computeFunStats(sorted),
-    orders: sorted.reverse(),
+    summary: computeSummary(entries, cancelledOrders, undatedOrders),
+    monthlySpending: computeMonthly(entries),
+    yearlySpending: computeYearly(entries),
+    weekdayDistribution: computeWeekday(entries),
+    hourlyDistribution: computeHourly(entries),
+    topRestaurants: computeRestaurants(entries),
+    cuisineBreakdown: computeCuisines(entries),
+    topItems: computeItems(entries),
+    funStats: computeFunStats(entries),
+    orders: allNewestFirst,
   };
 }
 
-function computeSummary(orders: SwiggyOrder[]): SummaryStats {
+function computeSummary(entries: Entry[], cancelledOrders: number, undatedOrders: number): SummaryStats {
+  const orders = entries.map((e) => e.o);
   const totalSpent = orders.reduce((sum, o) => sum + getOrderTotal(o), 0);
   const totalDeliveryFees = orders.reduce((sum, o) => sum + getDeliveryFee(o), 0);
   const totalSavings = orders.reduce((sum, o) => sum + getDiscount(o), 0);
 
-  let mostExpensive = orders[0] || { order_total: 0, restaurant_name: "", order_time: "" };
-  let cheapest = orders[0] || { order_total: 0, restaurant_name: "", order_time: "" };
-
+  let mostExpensive: SwiggyOrder | null = null;
+  let cheapest: SwiggyOrder | null = null;
   for (const o of orders) {
-    if (getOrderTotal(o) > getOrderTotal(mostExpensive)) mostExpensive = o;
-    if (getOrderTotal(o) < getOrderTotal(cheapest) && getOrderTotal(o) > 0) cheapest = o;
+    const total = getOrderTotal(o);
+    if (!mostExpensive || total > getOrderTotal(mostExpensive)) mostExpensive = o;
+    if (total > 0 && (!cheapest || total < getOrderTotal(cheapest))) cheapest = o;
   }
+
+  const describe = (o: SwiggyOrder | null) => ({
+    amount: o ? getOrderTotal(o) : 0,
+    restaurant: o?.restaurant_name || "Unknown",
+    date: o?.order_time || "",
+  });
 
   return {
     totalSpent,
     totalOrders: orders.length,
+    cancelledOrders,
+    undatedOrders,
     avgOrderValue: orders.length ? Math.round(totalSpent / orders.length) : 0,
     totalDeliveryFees,
     totalSavings,
-    mostExpensiveOrder: {
-      amount: getOrderTotal(mostExpensive),
-      restaurant: mostExpensive.restaurant_name || "Unknown",
-      date: mostExpensive.order_time || "",
-    },
-    cheapestOrder: {
-      amount: getOrderTotal(cheapest),
-      restaurant: cheapest.restaurant_name || "Unknown",
-      date: cheapest.order_time || "",
-    },
+    mostExpensiveOrder: describe(mostExpensive),
+    cheapestOrder: describe(cheapest),
   };
 }
 
-function computeMonthly(orders: SwiggyOrder[]): MonthlyData[] {
+function computeMonthly(entries: Entry[]): MonthlyData[] {
+  if (entries.length === 0) return [];
   const map = new Map<string, { amount: number; orders: number }>();
 
-  for (const o of orders) {
-    const d = new Date(o.order_time);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    const existing = map.get(key) || { amount: 0, orders: 0 };
-    existing.amount += getOrderTotal(o);
-    existing.orders += 1;
-    map.set(key, existing);
+  // Pre-fill every calendar month in the range so quiet months show as zero.
+  const first = entries[0].t;
+  const last = entries[entries.length - 1].t;
+  const cursor = new Date(first.getFullYear(), first.getMonth(), 1);
+  while (cursor.getFullYear() < last.getFullYear() ||
+    (cursor.getFullYear() === last.getFullYear() && cursor.getMonth() <= last.getMonth())) {
+    map.set(monthKey(cursor), { amount: 0, orders: 0 });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+  for (const { o, t } of entries) {
+    const bucket = map.get(monthKey(t))!;
+    bucket.amount += getOrderTotal(o);
+    bucket.orders += 1;
   }
 
   return Array.from(map.entries())
@@ -111,11 +163,11 @@ function computeMonthly(orders: SwiggyOrder[]): MonthlyData[] {
     }));
 }
 
-function computeYearly(orders: SwiggyOrder[]): YearlyData[] {
+function computeYearly(entries: Entry[]): YearlyData[] {
   const map = new Map<string, { amount: number; orders: number }>();
 
-  for (const o of orders) {
-    const year = String(new Date(o.order_time).getFullYear());
+  for (const { o, t } of entries) {
+    const year = String(t.getFullYear());
     const existing = map.get(year) || { amount: 0, orders: 0 };
     existing.amount += getOrderTotal(o);
     existing.orders += 1;
@@ -131,62 +183,48 @@ function computeYearly(orders: SwiggyOrder[]): YearlyData[] {
     }));
 }
 
-function computeWeekday(orders: SwiggyOrder[]): WeekdayData[] {
-  const map = new Map<number, { orders: number; amount: number }>();
-  for (let i = 0; i < 7; i++) map.set(i, { orders: 0, amount: 0 });
-
-  for (const o of orders) {
-    const day = new Date(o.order_time).getDay();
-    const existing = map.get(day)!;
-    existing.orders += 1;
-    existing.amount += getOrderTotal(o);
+function computeWeekday(entries: Entry[]): WeekdayData[] {
+  const buckets = WEEKDAYS.map(() => ({ orders: 0, amount: 0 }));
+  for (const { o, t } of entries) {
+    const bucket = buckets[t.getDay()];
+    bucket.orders += 1;
+    bucket.amount += getOrderTotal(o);
   }
-
-  return Array.from(map.entries()).map(([dayIdx, data]) => ({
+  return buckets.map((data, dayIdx) => ({
     day: WEEKDAYS[dayIdx],
     orders: data.orders,
     amount: Math.round(data.amount),
   }));
 }
 
-function computeHourly(orders: SwiggyOrder[]): HourlyData[] {
-  const map = new Map<number, { orders: number; amount: number }>();
-  for (let i = 0; i < 24; i++) map.set(i, { orders: 0, amount: 0 });
-
-  for (const o of orders) {
-    const hour = new Date(o.order_time).getHours();
-    const existing = map.get(hour)!;
-    existing.orders += 1;
-    existing.amount += getOrderTotal(o);
+function computeHourly(entries: Entry[]): HourlyData[] {
+  const buckets = Array.from({ length: 24 }, () => ({ orders: 0, amount: 0 }));
+  for (const { o, t } of entries) {
+    const bucket = buckets[t.getHours()];
+    bucket.orders += 1;
+    bucket.amount += getOrderTotal(o);
   }
-
-  return Array.from(map.entries()).map(([hour, data]) => ({
+  return buckets.map((data, hour) => ({
     hour: `${hour.toString().padStart(2, "0")}:00`,
     orders: data.orders,
     amount: Math.round(data.amount),
   }));
 }
 
-function computeRestaurants(orders: SwiggyOrder[]): RestaurantData[] {
+function computeRestaurants(entries: Entry[]): RestaurantData[] {
   const map = new Map<
     string,
     { cuisine: string; orders: number; totalSpent: number; lastOrdered: string }
   >();
 
-  for (const o of orders) {
+  // Entries are oldest-first, so the last one seen is the most recent order.
+  for (const { o } of entries) {
     const name = o.restaurant_name || "Unknown";
-    const cuisines = getCuisines(o);
-    const existing = map.get(name) || {
-      cuisine: cuisines.join(", "),
-      orders: 0,
-      totalSpent: 0,
-      lastOrdered: o.order_time,
-    };
+    const existing = map.get(name) || { cuisine: "", orders: 0, totalSpent: 0, lastOrdered: "" };
     existing.orders += 1;
     existing.totalSpent += getOrderTotal(o);
-    if (new Date(o.order_time) > new Date(existing.lastOrdered)) {
-      existing.lastOrdered = o.order_time;
-    }
+    existing.lastOrdered = o.order_time;
+    existing.cuisine = getCuisines(o).join(", ");
     map.set(name, existing);
   }
 
@@ -202,14 +240,15 @@ function computeRestaurants(orders: SwiggyOrder[]): RestaurantData[] {
     .sort((a, b) => b.totalSpent - a.totalSpent);
 }
 
-function computeCuisines(orders: SwiggyOrder[]): CuisineData[] {
-  const map = new Map<string, { orders: number; amount: number }>();
+function computeCuisines(entries: Entry[]): CuisineData[] {
+  const map = new Map<string, { orders: number; share: number; amount: number }>();
 
-  for (const o of orders) {
-    const cuisines = getCuisines(o);
+  for (const { o } of entries) {
+    const cuisines = Array.from(new Set(getCuisines(o)));
     for (const cuisine of cuisines) {
-      const existing = map.get(cuisine) || { orders: 0, amount: 0 };
+      const existing = map.get(cuisine) || { orders: 0, share: 0, amount: 0 };
       existing.orders += 1;
+      existing.share += 1 / cuisines.length;
       existing.amount += getOrderTotal(o) / cuisines.length;
       map.set(cuisine, existing);
     }
@@ -219,38 +258,42 @@ function computeCuisines(orders: SwiggyOrder[]): CuisineData[] {
     .map(([name, data]) => ({
       name,
       orders: data.orders,
+      share: data.share,
       amount: Math.round(data.amount),
     }))
-    .sort((a, b) => b.orders - a.orders);
+    .sort((a, b) => b.share - a.share);
 }
 
-function computeItems(orders: SwiggyOrder[]): ItemData[] {
-  const map = new Map<string, { count: number; totalSpent: number }>();
+function computeItems(entries: Entry[]): ItemData[] {
+  const map = new Map<string, { name: string; restaurant: string; count: number; totalSpent: number }>();
 
-  for (const o of orders) {
+  for (const { o } of entries) {
     if (!o.order_items) continue;
+    const restaurant = o.restaurant_name || "Unknown";
     for (const item of o.order_items) {
       const name = item.name || "Unknown Item";
-      const qty = num(item.quantity) || 1;
-      const total = num(item.total);
-      const existing = map.get(name) || { count: 0, totalSpent: 0 };
-      existing.count += qty;
-      existing.totalSpent += total;
-      map.set(name, existing);
+      // Same dish name at different restaurants is a different item.
+      const key = `${restaurant}\u0000${name}`;
+      const existing = map.get(key) || { name, restaurant, count: 0, totalSpent: 0 };
+      existing.count += num(item.quantity) || 1;
+      existing.totalSpent += num(item.total) || num(item.final_price) || num(item.subtotal);
+      map.set(key, existing);
     }
   }
 
   return Array.from(map.entries())
-    .map(([name, data]) => ({
-      name,
+    .map(([key, data]) => ({
+      key,
+      name: data.name,
+      restaurant: data.restaurant,
       count: data.count,
       totalSpent: Math.round(data.totalSpent),
     }))
     .sort((a, b) => b.count - a.count);
 }
 
-function computeFunStats(orders: SwiggyOrder[]): FunStats {
-  if (orders.length === 0) {
+function computeFunStats(entries: Entry[]): FunStats {
+  if (entries.length === 0) {
     return {
       firstOrderDate: "",
       longestStreak: 0,
@@ -264,30 +307,22 @@ function computeFunStats(orders: SwiggyOrder[]): FunStats {
     };
   }
 
-  const firstOrderDate = orders[0].order_time;
+  const first = entries[0];
+  const last = entries[entries.length - 1];
 
-  const orderDates = new Set(
-    orders.map((o) => new Date(o.order_time).toISOString().split("T")[0])
-  );
-  const sortedDates = Array.from(orderDates).sort();
+  // Streak of consecutive calendar days, using the same local dates as the charts.
+  const days = Array.from(new Set(entries.map((e) => dayNumber(e.t)))).sort((a, b) => a - b);
   let longestStreak = 1;
   let currentStreak = 1;
-  for (let i = 1; i < sortedDates.length; i++) {
-    const prev = new Date(sortedDates[i - 1]);
-    const curr = new Date(sortedDates[i]);
-    const diffDays = (curr.getTime() - prev.getTime()) / (1000 * 60 * 60 * 24);
-    if (diffDays === 1) {
-      currentStreak++;
-      longestStreak = Math.max(longestStreak, currentStreak);
-    } else {
-      currentStreak = 1;
-    }
+  for (let i = 1; i < days.length; i++) {
+    currentStreak = days[i] - days[i - 1] === 1 ? currentStreak + 1 : 1;
+    longestStreak = Math.max(longestStreak, currentStreak);
   }
 
-  const totalSavings = orders.reduce((sum, o) => sum + getDiscount(o), 0);
+  const totalSavings = entries.reduce((sum, e) => sum + getDiscount(e.o), 0);
 
   const restMap = new Map<string, number>();
-  for (const o of orders) {
+  for (const { o } of entries) {
     const name = o.restaurant_name || "Unknown";
     restMap.set(name, (restMap.get(name) || 0) + 1);
   }
@@ -296,57 +331,30 @@ function computeFunStats(orders: SwiggyOrder[]): FunStats {
     if (count > favoriteRestaurant.count) favoriteRestaurant = { name, count };
   }
 
-  const dayMap = new Map<number, number>();
-  for (const o of orders) {
-    const day = new Date(o.order_time).getDay();
-    dayMap.set(day, (dayMap.get(day) || 0) + 1);
+  const dayCounts = new Array(7).fill(0);
+  const hourCounts = new Array(24).fill(0);
+  for (const { t } of entries) {
+    dayCounts[t.getDay()] += 1;
+    hourCounts[t.getHours()] += 1;
   }
-  let maxDay = 0;
-  let maxDayCount = 0;
-  for (const [day, count] of dayMap) {
-    if (count > maxDayCount) {
-      maxDay = day;
-      maxDayCount = count;
-    }
-  }
+  const maxDay = dayCounts.indexOf(Math.max(...dayCounts));
+  const peakHour = hourCounts.indexOf(Math.max(...hourCounts));
 
-  const hourMap = new Map<number, number>();
-  for (const o of orders) {
-    const hour = new Date(o.order_time).getHours();
-    hourMap.set(hour, (hourMap.get(hour) || 0) + 1);
-  }
-  let peakHour = 0;
-  let peakCount = 0;
-  for (const [hour, count] of hourMap) {
-    if (count > peakCount) {
-      peakHour = hour;
-      peakCount = count;
-    }
-  }
+  const lateNightOrders = entries.filter(({ t }) => t.getHours() >= 22 || t.getHours() < 4).length;
 
-  const lateNightOrders = orders.filter((o) => {
-    const h = new Date(o.order_time).getHours();
-    return h >= 22 || h < 4;
-  }).length;
-
-  const uniqueRestaurants = new Set(orders.map((o) => o.restaurant_name)).size;
-
-  const months = new Set(
-    orders.map((o) => {
-      const d = new Date(o.order_time);
-      return `${d.getFullYear()}-${d.getMonth()}`;
-    })
-  ).size;
+  // Calendar months from first to last order, inclusive (quiet months count).
+  const monthsSpan =
+    (last.t.getFullYear() - first.t.getFullYear()) * 12 + (last.t.getMonth() - first.t.getMonth()) + 1;
 
   return {
-    firstOrderDate,
+    firstOrderDate: first.o.order_time,
     longestStreak,
     totalSavings,
     favoriteRestaurant,
     favoriteDay: WEEKDAYS[maxDay],
     peakHour: `${peakHour.toString().padStart(2, "0")}:00`,
     lateNightOrders,
-    uniqueRestaurants,
-    avgOrdersPerMonth: months > 0 ? Math.round(orders.length / months) : orders.length,
+    uniqueRestaurants: restMap.size,
+    avgOrdersPerMonth: Math.round((entries.length / monthsSpan) * 10) / 10,
   };
 }

@@ -10,7 +10,12 @@ import {
   ShieldCheck,
   Zap,
 } from "lucide-react";
-import { OrdersFetchMeta, OrdersFetchSuccessResponse } from "@/types/swiggy";
+import {
+  OrdersChunkResponse,
+  OrdersFetchMeta,
+  OrdersFetchStopReason,
+  SwiggyOrder,
+} from "@/types/swiggy";
 import LoginForm from "@/components/login-form";
 import LoadingScreen from "@/components/loading-screen";
 
@@ -18,62 +23,155 @@ export default function Home() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [progress, setProgress] = useState(0);
 
   const handleToken = async (token: string) => {
     setLoading(true);
+    setProgress(0);
     setError("");
 
+    const MAX_PAGES = 400;
+    const orders: SwiggyOrder[] = [];
+    const seen = new Set<string>();
+    let cursor = "";
+    let pagesFetched = 0;
+    let expectedTotal: number | null = null;
+    let truncated = false;
+    let stopReason: OrdersFetchStopReason = "unknown";
+    let warning: string | undefined;
+
     try {
-      const res = await fetch("/api/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      });
+      while (true) {
+        let chunk: OrdersChunkResponse | null = null;
+        let failure = "";
+        try {
+          const res = await fetch("/api/orders", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token, cursor }),
+          });
+          const text = await res.text();
+          let data: (Partial<OrdersChunkResponse> & { error?: string }) | null = null;
+          try {
+            data = JSON.parse(text);
+          } catch {
+            failure = `The server returned an unexpected response (HTTP ${res.status}).`;
+          }
+          if (data) {
+            if (!res.ok || !Array.isArray(data.orders)) failure = data.error || "Failed to fetch orders";
+            else chunk = data as OrdersChunkResponse;
+          }
+        } catch (err) {
+          failure = `Network error: ${err instanceof Error ? err.message : "Unknown error"}.`;
+        }
 
-      const data = await res.json();
+        if (!chunk) {
+          if (orders.length === 0) {
+            setError(failure);
+            setLoading(false);
+            return;
+          }
+          // Keep what we already have rather than throwing it away.
+          truncated = true;
+          stopReason = "api_error_mid_fetch";
+          warning = `Stopped early: ${failure}`;
+          break;
+        }
 
-      if (!res.ok) {
-        setError(data.error || "Failed to fetch orders");
-        setLoading(false);
-        return;
+        let added = 0;
+        for (const order of chunk.orders) {
+          const id = String(order.order_id ?? "");
+          if (id && seen.has(id)) continue;
+          if (id) seen.add(id);
+          orders.push(order);
+          added++;
+        }
+        pagesFetched += chunk.pagesFetched;
+        if (chunk.expectedTotal !== null) expectedTotal = chunk.expectedTotal;
+        setProgress(orders.length);
+
+        if (!chunk.nextCursor) {
+          truncated = chunk.truncated;
+          stopReason = chunk.stopReason;
+          warning = chunk.warning;
+          break;
+        }
+        if (added === 0 || chunk.nextCursor === cursor) {
+          truncated = true;
+          stopReason = "cursor_stalled";
+          warning = "Pagination cursor stalled before the full history could be fetched.";
+          break;
+        }
+        if (pagesFetched >= MAX_PAGES) {
+          truncated = true;
+          stopReason = "max_pages_reached";
+          warning = `Reached the maximum pagination limit (${MAX_PAGES} pages).`;
+          break;
+        }
+        cursor = chunk.nextCursor;
       }
 
-      const payload = data as Partial<OrdersFetchSuccessResponse>;
-
-      if (!Array.isArray(payload.orders) || payload.orders.length === 0) {
+      if (orders.length === 0) {
         setError("No orders found. Please check your token and try again.");
         setLoading(false);
         return;
       }
 
-      const fetchMeta: OrdersFetchMeta = payload.fetchMeta || {
-        expectedTotal: null,
-        fetchedCount: payload.orders.length,
-        pagesFetched: 0,
-        truncated: false,
-        stopReason: "unknown",
-        maxPages: 0,
-      };
+      if (expectedTotal !== null && orders.length < expectedTotal && !truncated) {
+        truncated = true;
+        stopReason = "reported_total_mismatch";
+        warning = "Swiggy reported more orders than were fetched.";
+      }
+      if (stopReason === "unknown") stopReason = "completed";
 
-      sessionStorage.setItem(
-        "swiggy_orders",
-        JSON.stringify({
-          orders: payload.orders,
-          fetchMeta,
-          warning: typeof payload.warning === "string" ? payload.warning : undefined,
-          fetchedAt: new Date().toISOString(),
-        })
-      );
+      // sessionStorage has a size quota; if the history does not fit, keep the
+      // newest orders that do and say so instead of failing.
+      let stored = orders;
+      while (true) {
+        const fetchMeta: OrdersFetchMeta = {
+          expectedTotal,
+          fetchedCount: stored.length,
+          pagesFetched,
+          truncated,
+          stopReason,
+          maxPages: MAX_PAGES,
+        };
+        try {
+          sessionStorage.setItem(
+            "swiggy_orders",
+            JSON.stringify({ orders: stored, fetchMeta, warning, fetchedAt: new Date().toISOString() })
+          );
+          break;
+        } catch {
+          if (stored.length <= 50) {
+            setError("Your browser refused to store the order data (storage is full or disabled).");
+            setLoading(false);
+            return;
+          }
+          stored = stored.slice(0, Math.floor(stored.length * 0.8));
+          truncated = true;
+          stopReason = "storage_limit";
+          warning = `Your browser's storage limit was reached, so only the ${stored.length.toLocaleString("en-IN")} most recent of ${orders.length.toLocaleString("en-IN")} orders are shown.`;
+        }
+      }
       router.push("/dashboard");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      setError(`Network error: ${msg}. Please try again.`);
+      setError(`Something went wrong: ${msg}. Please try again.`);
       setLoading(false);
     }
   };
 
   if (loading) {
-    return <LoadingScreen message="Fetching your Swiggy orders..." />;
+    return (
+      <LoadingScreen
+        message={
+          progress > 0
+            ? `Fetched ${progress.toLocaleString("en-IN")} orders so far...`
+            : "Fetching your Swiggy orders..."
+        }
+      />
+    );
   }
 
   return (

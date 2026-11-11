@@ -226,7 +226,7 @@ User-Agent: Mozilla/5.0 ...
 ## Project Structure
 
 ```
-market-simulator/
+swiggy-spending-dashboard/
 ├── public/
 │   └── images/                 # Static assets
 ├── src/
@@ -364,7 +364,7 @@ market-simulator/
 
 1. **Initialize Git & push to GitHub:**
    ```bash
-   cd market-simulator
+   cd swiggy-spending-dashboard
    git init
    git add .
    git commit -m "Initial commit: Swiggy spending dashboard"

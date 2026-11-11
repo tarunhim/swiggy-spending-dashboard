@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSwiggyHeaders } from "@/lib/utils";
+import { cookiesFromSetCookie, getSwiggyHeaders, mergeCookies } from "@/lib/utils";
 
 export async function POST(request: NextRequest) {
   try {
-    const { mobile, otp, deviceId } = await request.json();
+    const { mobile, otp, deviceId, session } = await request.json();
+    const sessionCookies = typeof session === "string" ? session : "";
 
     if (!mobile || !otp || !deviceId) {
       return NextResponse.json(
@@ -14,13 +15,21 @@ export async function POST(request: NextRequest) {
 
     const response = await fetch("https://www.swiggy.com/dapi/auth/otp-verify", {
       method: "POST",
-      headers: getSwiggyHeaders(),
+      headers: getSwiggyHeaders(sessionCookies || undefined),
       body: JSON.stringify({
         mobile,
         otp,
         _device_id: deviceId,
       }),
     });
+
+    const wafAction = response.headers.get("x-amzn-waf-action");
+    if (wafAction === "challenge" || (response.status === 202 && response.headers.get("content-length") === "0")) {
+      return NextResponse.json(
+        { error: "Swiggy's security blocked this request. Please use the token method instead.", code: "WAF_BLOCKED" },
+        { status: 403 }
+      );
+    }
 
     const data = await response.json();
 
@@ -31,14 +40,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const cookies = response.headers.getSetCookie?.() || [];
-    const allCookies = cookies.join("; ");
-
-    let sessionToken = allCookies;
-    if (!sessionToken) {
-      const rawHeader = response.headers.get("set-cookie") || "";
-      sessionToken = rawHeader;
-    }
+    // Build a real Cookie string (name=value pairs only, no Path/Expires
+    // attributes), carrying over the cookies from the send-otp step.
+    const sessionToken = mergeCookies(
+      sessionCookies,
+      cookiesFromSetCookie(response.headers.getSetCookie?.() || [])
+    );
 
     if (!sessionToken) {
       return NextResponse.json(

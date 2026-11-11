@@ -32,6 +32,7 @@ export interface SwiggyOrder {
   payment_method?: string;
   is_coupon_applied?: boolean;
   order_delivery_status?: string;
+  order_status?: string;
   rain_mode?: boolean;
   on_time?: boolean;
   sla_difference?: number;
@@ -67,6 +68,7 @@ export type OrdersFetchStopReason =
   | "invalid_json_mid_fetch"
   | "api_error_mid_fetch"
   | "empty_page_with_has_more"
+  | "storage_limit"
   | "unknown";
 
 export interface OrdersFetchMeta {
@@ -78,11 +80,16 @@ export interface OrdersFetchMeta {
   maxPages: number;
 }
 
-export interface OrdersFetchSuccessResponse {
+/** One chunk of pages from /api/orders. The client keeps calling with nextCursor. */
+export interface OrdersChunkResponse {
   success: true;
   orders: SwiggyOrder[];
-  totalOrders: number;
-  fetchMeta: OrdersFetchMeta;
+  /** Cursor for the next call, or null when this was the last chunk. */
+  nextCursor: string | null;
+  expectedTotal: number | null;
+  pagesFetched: number;
+  truncated: boolean;
+  stopReason: OrdersFetchStopReason;
   warning?: string;
 }
 
@@ -102,12 +109,16 @@ export interface DashboardData {
   cuisineBreakdown: CuisineData[];
   topItems: ItemData[];
   funStats: FunStats;
+  /** Every fetched order, newest first, including cancelled ones. */
   orders: SwiggyOrder[];
 }
 
 export interface SummaryStats {
   totalSpent: number;
+  /** Orders counted in the stats (cancelled/failed and undated orders excluded). */
   totalOrders: number;
+  cancelledOrders: number;
+  undatedOrders: number;
   avgOrderValue: number;
   totalDeliveryFees: number;
   totalSavings: number;
@@ -150,12 +161,17 @@ export interface RestaurantData {
 
 export interface CuisineData {
   name: string;
+  /** Orders that included this cuisine. */
   orders: number;
+  /** Order-weighted share: an order with n cuisines adds 1/n to each. */
+  share: number;
   amount: number;
 }
 
 export interface ItemData {
+  key: string;
   name: string;
+  restaurant: string;
   count: number;
   totalSpent: number;
 }

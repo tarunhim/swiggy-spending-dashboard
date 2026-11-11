@@ -39,6 +39,7 @@ function describeStopReason(reason?: string): string {
     invalid_json_mid_fetch: "Received invalid JSON while paginating.",
     api_error_mid_fetch: "Swiggy returned an API error while paginating.",
     empty_page_with_has_more: "Swiggy reported more pages but returned an empty page.",
+    storage_limit: "The full history did not fit in browser storage.",
     unknown: "Pagination ended for an unknown reason.",
   };
 
@@ -51,6 +52,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [fetchMeta, setFetchMeta] = useState<OrdersFetchMeta | null>(null);
   const [fetchWarning, setFetchWarning] = useState<string>("");
+  const [processingError, setProcessingError] = useState<string>("");
 
   useEffect(() => {
     const raw = sessionStorage.getItem("swiggy_orders");
@@ -81,12 +83,35 @@ export default function DashboardPage() {
       setData(processed);
       setFetchMeta(meta);
       setFetchWarning(warning);
-    } catch {
-      router.push("/");
+    } catch (err) {
+      // Surface the failure instead of silently bouncing back to the login page.
+      console.error("Failed to process Swiggy orders", err);
+      setProcessingError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setLoading(false);
     }
   }, [router]);
+
+  if (processingError) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center px-4">
+        <div className="max-w-md text-center space-y-3">
+          <AlertTriangle className="w-8 h-8 text-amber-400 mx-auto" />
+          <p className="font-semibold text-foreground">We couldn&apos;t process your orders</p>
+          <p className="text-sm text-muted-foreground">{processingError}</p>
+          <button
+            onClick={() => {
+              sessionStorage.removeItem("swiggy_orders");
+              router.push("/");
+            }}
+            className="text-sm text-primary hover:underline"
+          >
+            Back to login
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (loading || !data) {
     return <LoadingScreen message="Processing your orders..." />;
@@ -125,7 +150,7 @@ export default function DashboardPage() {
           <p className="text-xs text-muted-foreground">
             {fetchMeta && fetchMeta.expectedTotal !== null
               ? `${fetchMeta.fetchedCount.toLocaleString("en-IN")} / ${fetchMeta.expectedTotal.toLocaleString("en-IN")} orders fetched`
-              : `${data.summary.totalOrders.toLocaleString("en-IN")} orders analyzed`}
+              : `${data.orders.length.toLocaleString("en-IN")} orders fetched`}
           </p>
         </div>
       </header>
@@ -155,6 +180,17 @@ export default function DashboardPage() {
               </div>
             </div>
           </section>
+        )}
+
+        {(data.summary.cancelledOrders > 0 || data.summary.undatedOrders > 0) && (
+          <p className="text-xs text-muted-foreground">
+            Stats cover {data.summary.totalOrders.toLocaleString("en-IN")} orders.
+            {data.summary.cancelledOrders > 0 &&
+              ` ${data.summary.cancelledOrders.toLocaleString("en-IN")} cancelled or failed orders are excluded.`}
+            {data.summary.undatedOrders > 0 &&
+              ` ${data.summary.undatedOrders.toLocaleString("en-IN")} orders with no readable date are excluded.`}
+            {" "}They still appear in the order history below.
+          </p>
         )}
 
         {/* Summary Cards */}

@@ -17,7 +17,7 @@ const COLORS = [
 export default function CuisineChart({ data }: CuisineChartProps) {
   const [limit, setLimit] = useState<10 | 50 | "all">(10);
   const visible = limit === "all" ? data : data.slice(0, limit);
-  const totalOrders = data.reduce((sum, cuisine) => sum + cuisine.orders, 0);
+  const totalShare = data.reduce((sum, cuisine) => sum + cuisine.share, 0);
 
   return (
     <div className="bg-card border border-border rounded-xl p-6">
@@ -55,7 +55,7 @@ export default function CuisineChart({ data }: CuisineChartProps) {
               <PieChart>
                 <Pie
                   data={visible}
-                  dataKey="orders"
+                  dataKey="share"
                   nameKey="name"
                   cx="50%"
                   cy="50%"
@@ -75,6 +75,10 @@ export default function CuisineChart({ data }: CuisineChartProps) {
                     borderRadius: "8px",
                     fontSize: "13px",
                   }}
+                  formatter={(_value, name, entry) => [
+                    `${(entry?.payload as CuisineData | undefined)?.orders ?? 0} orders`,
+                    name,
+                  ]}
                 />
               </PieChart>
             </ResponsiveContainer>
@@ -93,7 +97,7 @@ export default function CuisineChart({ data }: CuisineChartProps) {
               />
               <span className="text-sm text-card-foreground truncate">{c.name}</span>
               <span className="text-xs text-muted-foreground ml-auto flex-shrink-0">
-                {totalOrders > 0 ? Math.round((c.orders / totalOrders) * 100) : 0}%
+                {totalShare > 0 ? Math.round((c.share / totalShare) * 100) : 0}%
               </span>
             </div>
           ))}

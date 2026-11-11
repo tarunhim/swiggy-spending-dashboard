@@ -4,6 +4,7 @@ import { useState, Fragment, useEffect } from "react";
 import { Search, ChevronDown, ChevronUp, Download } from "lucide-react";
 import { SwiggyOrder } from "@/types/swiggy";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { getDeliveryFee, getDiscount, isCancelledOrder } from "@/lib/data-processor";
 
 interface OrderTableProps {
   orders: SwiggyOrder[];
@@ -20,7 +21,7 @@ export default function OrderTable({ orders }: OrderTableProps) {
     (o) =>
       (o.restaurant_name || "").toLowerCase().includes(search.toLowerCase()) ||
       (o.order_items || []).some((item) =>
-        item.name.toLowerCase().includes(search.toLowerCase())
+        (item.name || "").toLowerCase().includes(search.toLowerCase())
       )
   );
 
@@ -58,12 +59,8 @@ export default function OrderTable({ orders }: OrderTableProps) {
       "Cuisine",
     ];
     const rows = filtered.map((order) => {
-      const discount = order.order_discount || order.coupon_discount || order.discount || 0;
-      const deliveryFee =
-        order.order_delivery_charge ||
-        order.discounted_total_delivery_fee ||
-        order.delivery_fee ||
-        0;
+      const discount = getDiscount(order);
+      const deliveryFee = getDeliveryFee(order);
       const cuisine = Array.isArray(order.restaurant_cuisine)
         ? order.restaurant_cuisine.join(", ")
         : order.restaurant_cuisine || "";
@@ -76,7 +73,7 @@ export default function OrderTable({ orders }: OrderTableProps) {
         String(discount),
         String(deliveryFee),
         order.payment_method || "",
-        order.order_delivery_status || "",
+        order.order_status || order.order_delivery_status || "",
         cuisine,
       ];
     });
@@ -170,16 +167,25 @@ export default function OrderTable({ orders }: OrderTableProps) {
                   </td>
                   <td className="py-3 px-2 font-medium text-card-foreground max-w-[180px] truncate">
                     {o.restaurant_name}
+                    {isCancelledOrder(o) && (
+                      <span className="ml-2 text-[10px] uppercase tracking-wide text-destructive">
+                        Cancelled
+                      </span>
+                    )}
                   </td>
                   <td className="py-3 px-2 text-muted-foreground hidden md:table-cell max-w-[200px] truncate">
                     {(o.order_items || []).map((item) => item.name).join(", ") || "—"}
                   </td>
-                  <td className="py-3 px-2 text-right font-medium text-card-foreground">
-                    {formatCurrency(o.order_total)}
+                  <td
+                    className={`py-3 px-2 text-right font-medium text-card-foreground ${
+                      isCancelledOrder(o) ? "line-through opacity-60" : ""
+                    }`}
+                  >
+                    {formatCurrency(Number(o.order_total) || 0)}
                   </td>
                   <td className="py-3 px-2 text-right text-emerald-500 hidden sm:table-cell">
-                    {(o.order_discount || o.coupon_discount || o.discount)
-                      ? `-${formatCurrency(o.order_discount || o.coupon_discount || o.discount || 0)}`
+                    {getDiscount(o)
+                      ? `-${formatCurrency(getDiscount(o))}`
                       : "—"}
                   </td>
                   <td className="py-3 px-2">
@@ -205,8 +211,8 @@ export default function OrderTable({ orders }: OrderTableProps) {
                         <div>
                           <p className="text-muted-foreground">Delivery Fee</p>
                           <p className="text-card-foreground font-medium">
-                            {(o.order_delivery_charge || o.discounted_total_delivery_fee || o.delivery_fee)
-                              ? formatCurrency(o.order_delivery_charge || o.discounted_total_delivery_fee || o.delivery_fee || 0)
+                            {getDeliveryFee(o)
+                              ? formatCurrency(getDeliveryFee(o))
                               : "Free"}
                           </p>
                         </div>
@@ -216,7 +222,7 @@ export default function OrderTable({ orders }: OrderTableProps) {
                         </div>
                         <div>
                           <p className="text-muted-foreground">Status</p>
-                          <p className="text-card-foreground font-medium">{o.order_delivery_status || "N/A"}</p>
+                          <p className="text-card-foreground font-medium">{o.order_status || o.order_delivery_status || "N/A"}</p>
                         </div>
                       </div>
                       {o.order_items && o.order_items.length > 0 && (

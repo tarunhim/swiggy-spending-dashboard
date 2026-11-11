@@ -21,6 +21,7 @@ export default function LoginForm({ onToken }: LoginFormProps) {
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [deviceId, setDeviceId] = useState("");
+  const [otpSession, setOtpSession] = useState("");
   const [token, setToken] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -58,6 +59,7 @@ export default function LoginForm({ onToken }: LoginFormProps) {
         return;
       }
       setDeviceId(data.deviceId);
+      setOtpSession(typeof data.session === "string" ? data.session : "");
       setStep("otp");
     } catch {
       setError("Network error. Please try again.");
@@ -79,7 +81,7 @@ export default function LoginForm({ onToken }: LoginFormProps) {
       const res = await fetch("/api/auth/verify-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mobile: phone, otp: otpValue, deviceId }),
+        body: JSON.stringify({ mobile: phone, otp: otpValue, deviceId, session: otpSession }),
       });
       const data = await res.json();
       if (!res.ok) {

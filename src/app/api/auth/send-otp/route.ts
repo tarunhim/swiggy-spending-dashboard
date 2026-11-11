@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
-import { getSwiggyHeaders } from "@/lib/utils";
+import { cookiesFromSetCookie, getSwiggyHeaders } from "@/lib/utils";
 
 export async function POST(request: NextRequest) {
   try {
@@ -65,6 +65,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       deviceId,
+      // Swiggy ties the OTP to the session started here; verify must send it back.
+      session: cookiesFromSetCookie(response.headers.getSetCookie?.() || []),
       message: "OTP sent successfully",
     });
   } catch (err) {
